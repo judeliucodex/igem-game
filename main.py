@@ -4714,7 +4714,7 @@ class Touch:
 # ==============================================================================
 #  設定存檔
 # ==============================================================================
-DEFAULT = {"lang": "zh", "quality": ("low" if IS_ANDROID else "high"), "touch": IS_ANDROID,
+DEFAULT = {"lang": "en", "quality": ("low" if IS_ANDROID else "high"), "touch": IS_ANDROID,
            "vol": .6, "full": IS_ANDROID, "fps": False, "sprites": True, "shake": True, "best": {}}
 
 
