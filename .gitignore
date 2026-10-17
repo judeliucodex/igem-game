@@ -1,0 +1,10 @@
+build/
+__pycache__/
+*.pyc
+microbe_wars_void.json
+.DS_Store
+.claude/
+.env*
+.vercel
+venv/
+.venv/

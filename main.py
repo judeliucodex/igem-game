@@ -16,9 +16,11 @@
 import os
 import sys
 import math
+import platform
 import random
 import json
 import array
+import asyncio
 import traceback
 
 import pygame
@@ -36,6 +38,8 @@ except NameError:
     BASE_DIR = os.getcwd()
 CFG_PATH = os.path.join(BASE_DIR, "microbe_wars_void.json")
 
+# 瀏覽器版 (pygbag / WebAssembly) / running in the browser via pygbag
+IS_WEB = sys.platform == "emscripten"
 IS_ANDROID = ("ANDROID_ARGUMENT" in os.environ) or (getattr(sys, "getandroidapilevel", None) is not None)
 EV_FDOWN = getattr(pygame, "FINGERDOWN", -101)
 EV_FUP = getattr(pygame, "FINGERUP", -102)
@@ -596,12 +600,24 @@ class Display:
         self.smooth = True
         self.win_size = (1280, 720)
         self.full = bool(cfg.get("full", IS_ANDROID))
-        try:
-            info = pygame.display.Info()
-            dw, dh = max(320, info.current_w), max(240, info.current_h)
-        except Exception:
-            dw, dh = 1280, 720
-        if IS_ANDROID:
+        dw, dh = 1280, 720
+        if not IS_WEB:
+            try:
+                info = pygame.display.Info()
+                dw, dh = max(320, info.current_w), max(240, info.current_h)
+            except Exception:
+                pass
+        if IS_WEB:
+            # 瀏覽器會自動縮放畫布 / pygbag scales the canvas to the page; fullscreen goes through the browser
+            self.win_size = (1280, 720)
+            self.full = False
+            self.screen = pygame.display.set_mode(self.win_size)
+            try:
+                # 重新計算畫布比例 / pygbag sized the canvas before set_mode; refit it to 16:9
+                platform.window.window_resize()
+            except Exception:
+                pass
+        elif IS_ANDROID:
             self.screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
             self.full = True
         else:
@@ -642,7 +658,7 @@ class Display:
         self.box = (self.view.topleft != (0, 0)) or ((vw, vh) != (w, h))
 
     def resize(self, w, h):
-        if not self.full:
+        if not self.full and not IS_WEB:
             self.win_size = (max(360, int(w)), max(240, int(h)))
             try:
                 self.screen = pygame.display.set_mode(self.win_size, self.flags)
@@ -652,6 +668,17 @@ class Display:
 
     def toggle_full(self):
         self.full = not self.full
+        if IS_WEB:
+            try:
+                doc = platform.window.document
+                if self.full:
+                    doc.documentElement.requestFullscreen()
+                else:
+                    doc.exitFullscreen()
+            except Exception:
+                self.full = not self.full
+            self.cfg["full"] = self.full
+            return
         try:
             if self.full:
                 self.screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
@@ -869,7 +896,13 @@ def load_anim(name):
         return None
     fr, du = [], []
     try:
-        from PIL import Image, ImageSequence
+        # 網頁版不載入 Pillow / On the web, skip Pillow: pygbag auto-installs it when it sees the import,
+        # and that breaks pygame's display. importlib hides the import from pygbag's scanner.
+        if IS_WEB:
+            raise ImportError("Pillow disabled on web")
+        import importlib
+        Image = importlib.import_module("PIL.Image")
+        ImageSequence = importlib.import_module("PIL.ImageSequence")
         im = Image.open(p)
         conv = getattr(pygame.image, "frombytes", None) or pygame.image.fromstring
         for f in ImageSequence.Iterator(im):
@@ -4685,11 +4718,18 @@ DEFAULT = {"lang": "zh", "quality": ("low" if IS_ANDROID else "high"), "touch": 
            "vol": .6, "full": IS_ANDROID, "fps": False, "sprites": True, "shake": True, "best": {}}
 
 
+CFG_KEY = "microbe_wars_void"
+
+
 def load_cfg():
     c = dict(DEFAULT)
     try:
-        with open(CFG_PATH, "r", encoding="utf-8") as f:
-            d = json.load(f)
+        if IS_WEB:
+            raw = platform.window.localStorage.getItem(CFG_KEY)
+            d = json.loads(raw) if raw else {}
+        else:
+            with open(CFG_PATH, "r", encoding="utf-8") as f:
+                d = json.load(f)
         if isinstance(d, dict):
             for k in DEFAULT:
                 if k in d:
@@ -4709,6 +4749,9 @@ def load_cfg():
 
 def save_cfg(c):
     try:
+        if IS_WEB:
+            platform.window.localStorage.setItem(CFG_KEY, json.dumps(c, ensure_ascii=False))
+            return
         with open(CFG_PATH, "w", encoding="utf-8") as f:
             json.dump(c, f, ensure_ascii=False, indent=1)
     except Exception:
@@ -4876,8 +4919,10 @@ class Game:
                 o.damage(dmg, self, from_x)
 
     # ---------- loop ----------
-    def run(self):
+    async def run(self):
         while True:
+            # 讓出控制權給瀏覽器 / yield to the browser once per frame (required by pygbag)
+            await asyncio.sleep(0)
             ms = self.clock.tick(FPS_CAP)
             dt = min(.05, ms / 1000.)
             self.fps = self.clock.get_fps()
@@ -4935,6 +4980,8 @@ class Game:
     def quit(self):
         self.cfg["lang"] = LANG
         save_cfg(self.cfg)
+        if IS_WEB:
+            return
         pygame.quit()
         sys.exit(0)
 
@@ -6287,17 +6334,17 @@ class Game:
 
 
 # ==============================================================================
-def main():
+async def main():
     try:
         pygame.mixer.pre_init(44100, -16, 2, 512)
     except Exception:
         pass
-    Game().run()
+    await Game().run()
 
 
 if __name__ == "__main__":
     try:
-        main()
+        asyncio.run(main())
     except SystemExit:
         pass
     except Exception:
